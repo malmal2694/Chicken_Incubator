@@ -54,4 +54,3 @@ dkms.conf
 # other files
 *.ld
 Debug/
-*.*
