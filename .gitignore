@@ -54,3 +54,4 @@ dkms.conf
 # other files
 *.ld
 Debug/
+stm32_flash.ld
