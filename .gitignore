@@ -136,3 +136,7 @@ $RECYCLE.BIN/
 *.lnk
 
 # End of https://www.gitignore.io/api/c,eclipse,windows
+
+# other
+stm32_flash.ld
+Debug/
