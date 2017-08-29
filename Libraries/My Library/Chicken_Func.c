@@ -63,7 +63,7 @@ void Chicken_Init()
 	IWDG_Reset();
 
 // set Pins As Output
-	TimPinOutInit(PORTA, PIN9); // Enable PIN for TIMER1, CH 2(FAN)
+	TimPinOutInit(PORTA, PIN9); // Enable PIN for TIMER1, CH 2(FAN for control temperature)
 	TimPinOutInit(PORTA, PIN10); // Enable PIN for TIMER1, CH 3(HEATER)
 	Init_PIN(PORTB,PIN6,Config_Out_50MHz,Alter_Out_PP); // set output for USART1 Tx
 	Init_PIN(PORTB, PIN8, Config_Out_50MHz, Alter_Out_PP); // configuration out pin for I2C1 SCL
@@ -118,8 +118,11 @@ void Chicken_Init()
 	LCD_8BIT_Init(&LCD_PIN);
 
 	Chicken_EggInfo();
-};
 
+// initialize DS3231 alarm
+	DS3231_SetCtrlRegister(I2C1, DS3231_FLAG_CONTROL_A1IE);// alarm 1 enable
+	DS3231_SetCtrlRegister(I2C1, DS3231_FLAG_CONTROL_INTCN);// enable interrupt control
+};
 
 void Chicken_MainMenu()
 {
@@ -217,7 +220,7 @@ void Chicken_MenuConfigDate()
 	DS3231_WriteDate.Seconds = atoi(date);// convert string to int
 	IWDG_Reset();
 
-	DS3231_WriteDateTime(I2C1, &DS3231_WriteDate);// set date and time
+	DS3231_SetDateTime(I2C1, &DS3231_WriteDate);// set date and time
 	IWDG_Reset();
 };
 void Chicken_MenuStartIncubator()
@@ -239,7 +242,7 @@ void Chicken_MenuStartIncubator()
 		AT24C02_Write(I2C1, 0xA0, 0x0A, RandomNumberNow);
 		Chicken_Delay(12);// wait 12ms
 
-		DS3231_ReadDateTime(I2C1, &TimeStartIncubator);// receive date and time start incubator
+		DS3231_GetDateTime(I2C1, &TimeStartIncubator);// receive date and time start incubator
 		AT24C02_Write(I2C1, 0xA0, 5, TimeStartIncubator.Year);
 		Chicken_Delay(12);// wait 12ms
 		AT24C02_Write(I2C1, 0xA0, 6, TimeStartIncubator.Month);
@@ -258,11 +261,10 @@ void Chicken_MenuStartIncubator()
 		struct DS3231_DateTime NextDay;// structure for save next day
 		Chicken_CalculateNextDay(&TimeStartIncubator, &NextDay);// calculate next day
 
-		DS3231_WriteAlarm1.Seconds = NextDay.Seconds;
-		DS3231_WriteAlarm1.Minutes = NextDay.Minutes;
-		DS3231_WriteAlarm1.Hour = NextDay.Hour;
-		DS3231_WriteAlarm1.Day = NextDay.Day;
-		DS3231_WriteAlarm1.Date = NextDay.Date;
+		DS3231_WriteAlarm1.Seconds = NextDay.Seconds | DS3231_ALARM_MATCH;
+		DS3231_WriteAlarm1.Minutes = NextDay.Minutes | DS3231_ALARM_MATCH;
+		DS3231_WriteAlarm1.Hour = NextDay.Hour | DS3231_ALARM_MATCH;
+		DS3231_WriteAlarm1.DY_DT = NextDay.Day | DS3231_ALARM_NO_MATCH;
 		DS3231_SetAlarm1(I2C1, &DS3231_WriteAlarm1);// set ALARM1 for next day
 	}
 };
@@ -288,7 +290,7 @@ void Chicken_Monitoring(float *temp, float *humidity, struct DS3231_DateTime *Ti
 		IWDG_Reset();
 		break;
 	case 5:
-		Chicken_MonitoringTypePeriod();
+		Chicken_MonitoringTypePeriod();// display type period
 		IWDG_Reset();
 		break;
 	}
@@ -321,7 +323,7 @@ void Chicken_MonitoringTimeNow()
 	LCD_Home(&LCD_PIN);
 	LCD_Printf("time now: ", &LCD_PIN);
 
-	DS3231_ReadDateTime(I2C1, &DS3231_ReadDate);// read date and time
+	DS3231_GetDateTime(I2C1, &DS3231_ReadDate);// read date and time
 
 	itoa(DS3231_ReadDate.Year, buffer, 10);// convert year to string (10 = decimal)
 	strcat(timeString, buffer);
@@ -509,18 +511,17 @@ void Chicken_CalculateNextDay(struct DS3231_DateTime *TimeNow, struct DS3231_Dat
 void Chicken_SetAlarmNextDay()
 {
 	DS3231_GetAlarm1(I2C1, &DS3231_ReadAlarm1);// read time alarm
-	DS3231_ReadDateTime(I2C1, &DS3231_ReadDate);// read date and time
+	DS3231_GetDateTime(I2C1, &DS3231_ReadDate);// read date and time
 
 	struct DS3231_DateTime NextDay;
 	Chicken_CalculateNextDay(&DS3231_ReadDate, &NextDay);// set NextDay = calculate next day
 
-	DS3231_WriteAlarm1.Seconds = DS3231_ReadAlarm1.Seconds;
-	DS3231_WriteAlarm1.Minutes = DS3231_ReadAlarm1.Minutes;
-	DS3231_WriteAlarm1.Hour = DS3231_ReadAlarm1.Hour;
-	DS3231_WriteAlarm1.Day = NextDay.Day;
-	DS3231_WriteAlarm1.Date = NextDay.Date;
+	DS3231_WriteAlarm1.Seconds = DS3231_ReadAlarm1.Seconds | DS3231_ALARM_MATCH;
+	DS3231_WriteAlarm1.Minutes = DS3231_ReadAlarm1.Minutes | DS3231_ALARM_MATCH;
+	DS3231_WriteAlarm1.Hour = DS3231_ReadAlarm1.Hour | DS3231_ALARM_MATCH;
+	DS3231_WriteAlarm1.DY_DT = NextDay.Day | DS3231_ALARM_NO_MATCH;
 	DS3231_SetAlarm1(I2C1, &DS3231_WriteAlarm1);// set alarm for next day
-	DS3231_ClearFlag(I2C1, DS3231_FLAG_A1F);// clear flag alarm1
+	DS3231_ClearFlag(I2C1, DS3231_FLAG_STATUS_A1F);// clear flag alarm1
 
 	LengthTimeStartIncubator++;// Increments of one
 	AT24C02_Write(I2C1, 0xA0, 0x0B, LengthTimeStartIncubator);// save length time start incubator
@@ -736,7 +737,7 @@ void Chicken_Core()
 				Chicken_MainMenu();
 		}
 
-		if(DS3231_ReadFlag(I2C1, DS3231_FLAG_A1F) != 0x00)// if flag alarm1(A1F) == enable, execute procedure SetAlarmNextDay
+		if(DS3231_GetFlag(I2C1, DS3231_FLAG_STATUS_A1F) != 0x00)// if flag alarm1(A1F) == enable, execute procedure SetAlarmNextDay
 			Chicken_SetAlarmNextDay();
 
 		TempVal = SHT_ReadTemp(I2C1);// read temperature
